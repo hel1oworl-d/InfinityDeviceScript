@@ -158,7 +158,7 @@ elif action == "part_dump":
         "vbmeta_odm_b": "2m", "avbmeta_rs_a": "2m", "avbmeta_rs_b": "2m", "common_rs1_a": "8m",
         "common_rs1_b": "8m", "common_rs2_a": "16m", "common_rs2_b": "16m", "common_rs3_a": "32m",
         "common_rs3_b": "32m", "reserve1": "8m", "reserve2": "16m", "calinv": "2m",
-        "gsort": "16m", "mem": "4m", "ffu": "8m", "cust": "2048m", "rescue": "128m", "userdata": "50841m"
+        "gsort": "16m", "mem": "4m", "ffu": "8m", "cust": "2048m", "rescue": "128m"
     }
 
     part_size = PARTITION_SIZES.get(part_name, "64m")
