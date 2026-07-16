@@ -29,7 +29,6 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
                 "fdl", FDL2, FDL2_ADDR, "exec"] + cmd_list
     print(f"Executing: {' '.join(full_cmd)}")
 
-    # Добавляем stdin=subprocess.PIPE, чтобы иметь возможность писать команды в консоль FDL2
     proc = subprocess.Popen(
         full_cmd,
         cwd=cwd,
@@ -42,44 +41,52 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
 
     last_activity = time.time()
     killed_by_watchdog = False
-    reset_sent = False
 
     while True:
+        # Чекаем, не сдох ли процесс сам по себе
         if proc.poll() is not None:
             break
 
-        ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+        ready, _, _ = select.select([proc.stdout], [], [], 0.5)
         if ready:
             line = proc.stdout.readline()
             if line:
-                print(line.rstrip())
+                cleaned_line = line.rstrip()
+                print(cleaned_line)
                 last_activity = time.time()
                 
-                # Если видим, что чтение завершено (Read Part Done) и мы просили сброс — пуляем reset в stdin
-                if send_reset_after and "Read Part Done" in line and not reset_sent:
-                    print(">>> Обнаружено окончание дампа. Отправка 'reset' в консоль FDL...")
-                    try:
-                        proc.stdin.write("reset\n")
-                        proc.stdin.flush()
-                        reset_sent = True
-                    except Exception as e:
-                        print(f"[!] Не удалось отправить reset: {e}")
+                # ЖЕСТКИЙ ПЕРЕХВАТ: как только видим маркеры финиша — РЕЗКО шлём ресет и ВЫХОДИМ из зависшего цикла!
+                if "Read Part Done" in cleaned_line or "Write Part Done" in cleaned_line or "100%" in cleaned_line:
+                    if send_reset_after:
+                        print(">>> Маркер завершения обнаружен! Принудительно отправляем 'reset'...")
+                        try:
+                            proc.stdin.write("reset\n")
+                            proc.stdin.flush()
+                            time.sleep(0.5) # Даем полсекунды загрузчику переварить команду
+                        except Exception as e:
+                            print(f"[!] Ошибка отправки reset: {e}")
+                    
+                    # Процесс выполнил задачу, выходим из цикла ожидания stdout, чтобы пошел перенос файлов!
+                    break
             else:
                 break
 
+        # Проверка тайм-аута удержания
         if time.time() - last_activity > idle_timeout:
             print(f"[!] Тайм-аут ({idle_timeout} сек).")
             proc.kill()
-            try:
-                proc.wait(timeout=2)
-            except Exception:
-                pass
+            try: proc.wait(timeout=2)
+            except Exception: pass
             killed_by_watchdog = True
             break
 
+    # После выхода из цикла гарантированно закрываем потоки и тушим spd_dump, если он еще жив
     try:
-        for line in proc.stdout:
-            print(line.rstrip())
+        proc.stdin.close()
+        proc.stdout.close()
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=1)
     except Exception:
         pass
 
