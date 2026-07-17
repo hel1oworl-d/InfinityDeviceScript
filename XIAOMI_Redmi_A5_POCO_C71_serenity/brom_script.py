@@ -54,16 +54,15 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
                 print(cleaned_line)
                 last_activity = time.time()
                 
-                # Перехватываем строку ДО того, как процесс закроется окончательно
+                # Захватываем финишные маркеры до закрытия процесса утилиты
                 if "Read Part Done" in cleaned_line or "Write Part Done" in cleaned_line or "100.0%" in cleaned_line:
                     if send_reset_after:
-                        print(">>> Финишный маркер обнаружен! Отправка команды 'reset' в FDL2...")
+                        print(">>> Финишный маркер обнаружен! Проталкиваем 'reset' в FDL2...")
                         try:
-                            # Отправляем команду напрямую в контрольный поток
                             proc.stdin.write("reset\n")
                             proc.stdin.flush()
-                            # КРИТИЧЕСКИ ВАЖНО: держим процесс живым 300мс, чтобы FDL2 успел считать байты из USB-буфера
-                            time.sleep(0.3)
+                            # Пауза, чтобы USB-контроллер ПК успел передать байты железке
+                            time.sleep(0.2)
                         except Exception as e:
                             print(f"[!] Ошибка отправки команды reset: {e}")
                     break
@@ -78,7 +77,7 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
             killed_by_watchdog = True
             break
 
-    # Мягко подчищаем за собой дескрипторы
+    # Закрываем дескрипторы и тушим подпроцесс
     try:
         proc.stdin.close()
         proc.stdout.close()
@@ -112,20 +111,21 @@ def move_dumped_files(src_dir, dst_dir):
     return moved
 
 
+# ================= ВЕТВИ ВЫПОЛНЕНИЯ ОПЕРАЦИЙ =================
+
 if action == "full_dump":
     save_dir = os.path.join(workspace, "Full_Dump", DEVICE_NAME)
     os.makedirs(save_dir, exist_ok=True)
     try:
         print(">>> Запуск нативного дампа служебных разделов (all_lite)...")
-        returncode, killed = run_cmd_watchdog(["r", "all_lite"], cwd=DEVICE_DIR)
+        # Добавлен флаг принудительного сброса после работы
+        returncode, killed = run_cmd_watchdog(["r", "all_lite"], cwd=DEVICE_DIR, send_reset_after=True)
     finally:
-        time.sleep(1.5)
+        time.sleep(1.0)
         moved = move_dumped_files(DEVICE_DIR, save_dir)
         print(f"\n[+] Операция завершена. Перенесено разделов: {len(moved)}")
 
 elif action == "part_dump":
-    # Переносим чтение аргументов внутрь блока, здесь они занимают 4 и 5 индексы
-    # sys.argv[4] — это папка (SinglePart_Dump), sys.argv[5] — имя раздела
     raw_part_name = sys.argv[5] 
     
     IS_AB = True
@@ -167,7 +167,6 @@ elif action == "part_dump":
     }
 
     part_size = PARTITION_SIZES.get(part_name, "64m")
-    
     save_dir = os.path.join(workspace, "SinglePart_Dump", DEVICE_NAME)
     os.makedirs(save_dir, exist_ok=True)
     
@@ -203,11 +202,8 @@ elif action == "full_flash":
             for bin_file in sorted(bin_files):
                 part_name = bin_file.replace(".bin", "")
                 file_path = os.path.join(src_dir, bin_file)
-                
                 flash_commands.extend(["write_part", part_name, file_path])
                 print(f"  [+] В очереди на прошивку: {part_name}")
-            
-            flash_commands.append("reset")
             
             print(f"\n>>> ЗАПУСК ПОЛНОЙ ПРОШИВКИ ({len(bin_files)} разделов)...")
             print(">>> НЕ ОТКЛЮЧАЙТЕ УСТРОЙСТВО ОТ ПК!")
@@ -215,14 +211,13 @@ elif action == "full_flash":
             ret_code, killed = run_cmd_watchdog(flash_commands, cwd=DEVICE_DIR, send_reset_after=True)
             
             if ret_code == 0:
-                print("\n[+] УСПЕХ: Все разделы восстановлены, выполнен reset!")
+                print("\n[+] УСПЕХ: Все разделы восстановлены, выполнен автоматический reset!")
             else:
                 print(f"\n[!] Ошибка при прошивке. Код возврата: {ret_code}")
 
 elif action == "part_flash":
-    # Переносим чтение аргументов строго внутрь блока part_flash!
-    folder_type = sys.argv[4]     # Сюда прилетает "Full_Dump" или "SinglePart_Dump"
-    raw_part_name = sys.argv[5].lower().strip()  # Имя раздела, который ввёл юзер (напр. boot)
+    folder_type = sys.argv[4]     
+    raw_part_name = sys.argv[5].lower().strip()  
     
     IS_AB = True
     slot_dependent_partitions = {
@@ -250,9 +245,10 @@ elif action == "part_flash":
         print(f">>> Образ: {file_to_flash}")
         print(">>> НЕ ОТКЛЮЧАЙТЕ УСТРОЙСТВО!")
         
-        ret_code, killed = run_cmd_watchdog(["write_part", part_name, file_to_flash, "reset"], cwd=DEVICE_DIR, send_reset_after=True)
+        # Убран строковый аргумент "reset" из списка, так как вотчдог отправит его сам в интерактивном режиме
+        ret_code, killed = run_cmd_watchdog(["write_part", part_name, file_to_flash], cwd=DEVICE_DIR, send_reset_after=True)
         
         if ret_code == 0:
-            print(f"\n[+] Раздел {part_name} успешно восстановлен из {folder_type}! Выполнен аппаратный сброс.")
+            print(f"\n[+] Раздел {part_name} успешно восстановлен из {folder_type}! Перезагрузка...")
         else:
             print(f"[!] Ошибка прошивки раздела {part_name}. Код возврата: {ret_code}")
