@@ -24,14 +24,19 @@ FDL2_ADDR = "0x9efffe00"
 IDLE_TIMEOUT_SEC = 15
 
 
-def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_reset_after=False, is_multi_op=False):
+def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_reset_after=False):
     full_cmd = [spd_dump, "exec_addr", EXEC_ADDR, "fdl", FDL1, FDL1_ADDR,
                 "fdl", FDL2, FDL2_ADDR, "exec"] + cmd_list
     print(f"Executing: {' '.join(full_cmd)}")
 
     proc = subprocess.Popen(
-        full_cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        stdin=subprocess.PIPE, text=True, bufsize=1,
+        full_cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE,
+        text=True,
+        bufsize=1,
     )
 
     last_activity = time.time()
@@ -49,21 +54,20 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
                 print(cleaned_line)
                 last_activity = time.time()
                 
-                # Применяем жесткий перехват ТОЛЬКО если это одиночная операция!
-                if not is_multi_op:
-                    if "Read Part Done" in cleaned_line or "Write Part Done" in cleaned_line or "100%" in cleaned_line:
-                        if send_reset_after:
-                            print(">>> Маркер завершения обнаружен! Принудительно отправляем 'reset'...")
-                            try:
-                                proc.stdin.write("reset\n")
-                                proc.stdin.flush()
-                                time.sleep(0.5)
-                            except Exception as e:
-                                print(f"[!] Ошибка отправки reset: {e}")
-                        break
-        else:
-            # Если процесс завершился, readline вернет пустую строку
-            if proc.poll() is not None:
+                # Перехватываем строку ДО того, как процесс закроется окончательно
+                if "Read Part Done" in cleaned_line or "Write Part Done" in cleaned_line or "100.0%" in cleaned_line:
+                    if send_reset_after:
+                        print(">>> Финишный маркер обнаружен! Отправка команды 'reset' в FDL2...")
+                        try:
+                            # Отправляем команду напрямую в контрольный поток
+                            proc.stdin.write("reset\n")
+                            proc.stdin.flush()
+                            # КРИТИЧЕСКИ ВАЖНО: держим процесс живым 300мс, чтобы FDL2 успел считать байты из USB-буфера
+                            time.sleep(0.3)
+                        except Exception as e:
+                            print(f"[!] Ошибка отправки команды reset: {e}")
+                    break
+            else:
                 break
 
         if time.time() - last_activity > idle_timeout:
@@ -74,6 +78,7 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
             killed_by_watchdog = True
             break
 
+    # Мягко подчищаем за собой дескрипторы
     try:
         proc.stdin.close()
         proc.stdout.close()
