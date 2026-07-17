@@ -119,7 +119,7 @@ if action == "full_dump":
     os.makedirs(save_dir, exist_ok=True)
     try:
         print(">>> Запуск нативного дампа служебных разделов (all_lite)...")
-        returncode, killed = run_cmd_watchdog(["r", "all_lite"], cwd=DEVICE_DIR)
+        returncode, killed = run_cmd_watchdog(["r", "all_lite", "reset"], cwd=DEVICE_DIR)
     finally:
         time.sleep(1.5)
         moved = move_dumped_files(DEVICE_DIR, save_dir)
