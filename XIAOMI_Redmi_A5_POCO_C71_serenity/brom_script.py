@@ -24,26 +24,20 @@ FDL2_ADDR = "0x9efffe00"
 IDLE_TIMEOUT_SEC = 15
 
 
-def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_reset_after=False):
+def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_reset_after=False, is_multi_op=False):
     full_cmd = [spd_dump, "exec_addr", EXEC_ADDR, "fdl", FDL1, FDL1_ADDR,
                 "fdl", FDL2, FDL2_ADDR, "exec"] + cmd_list
     print(f"Executing: {' '.join(full_cmd)}")
 
     proc = subprocess.Popen(
-        full_cmd,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.PIPE,
-        text=True,
-        bufsize=1,
+        full_cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE, text=True, bufsize=1,
     )
 
     last_activity = time.time()
     killed_by_watchdog = False
 
     while True:
-        # Чекаем, не сдох ли процесс сам по себе
         if proc.poll() is not None:
             break
 
@@ -55,23 +49,23 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
                 print(cleaned_line)
                 last_activity = time.time()
                 
-                # ЖЕСТКИЙ ПЕРЕХВАТ: как только видим маркеры финиша — РЕЗКО шлём ресет и ВЫХОДИМ из зависшего цикла!
-                if "Read Part Done" in cleaned_line or "Write Part Done" in cleaned_line or "100%" in cleaned_line:
-                    if send_reset_after:
-                        print(">>> Маркер завершения обнаружен! Принудительно отправляем 'reset'...")
-                        try:
-                            proc.stdin.write("reset\n")
-                            proc.stdin.flush()
-                            time.sleep(0.5) # Даем полсекунды загрузчику переварить команду
-                        except Exception as e:
-                            print(f"[!] Ошибка отправки reset: {e}")
-                    
-                    # Процесс выполнил задачу, выходим из цикла ожидания stdout, чтобы пошел перенос файлов!
-                    break
-            else:
+                # Применяем жесткий перехват ТОЛЬКО если это одиночная операция!
+                if not is_multi_op:
+                    if "Read Part Done" in cleaned_line or "Write Part Done" in cleaned_line or "100%" in cleaned_line:
+                        if send_reset_after:
+                            print(">>> Маркер завершения обнаружен! Принудительно отправляем 'reset'...")
+                            try:
+                                proc.stdin.write("reset\n")
+                                proc.stdin.flush()
+                                time.sleep(0.5)
+                            except Exception as e:
+                                print(f"[!] Ошибка отправки reset: {e}")
+                        break
+        else:
+            # Если процесс завершился, readline вернет пустую строку
+            if proc.poll() is not None:
                 break
 
-        # Проверка тайм-аута удержания
         if time.time() - last_activity > idle_timeout:
             print(f"[!] Тайм-аут ({idle_timeout} сек).")
             proc.kill()
@@ -80,7 +74,6 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
             killed_by_watchdog = True
             break
 
-    # После выхода из цикла гарантированно закрываем потоки и тушим spd_dump, если он еще жив
     try:
         proc.stdin.close()
         proc.stdout.close()
