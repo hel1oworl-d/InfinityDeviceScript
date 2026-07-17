@@ -24,9 +24,10 @@ FDL2_ADDR = "0x9efffe00"
 IDLE_TIMEOUT_SEC = 15
 
 
-def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_reset_after=False):
+def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC):
+    # Нативно добавляем команду reset в конец списка аргументов spd_dump
     full_cmd = [spd_dump, "exec_addr", EXEC_ADDR, "fdl", FDL1, FDL1_ADDR,
-                "fdl", FDL2, FDL2_ADDR, "exec"] + cmd_list
+                "fdl", FDL2, FDL2_ADDR, "exec"] + cmd_list + ["reset"]
     print(f"Executing: {' '.join(full_cmd)}")
 
     proc = subprocess.Popen(
@@ -34,7 +35,6 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        stdin=subprocess.PIPE,
         text=True,
         bufsize=1,
     )
@@ -50,22 +50,8 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
         if ready:
             line = proc.stdout.readline()
             if line:
-                cleaned_line = line.rstrip()
-                print(cleaned_line)
+                print(line.rstrip())
                 last_activity = time.time()
-                
-                # Захватываем финишные маркеры до закрытия процесса утилиты
-                if "Read Part Done" in cleaned_line or "Write Part Done" in cleaned_line or "100.0%" in cleaned_line:
-                    if send_reset_after:
-                        print(">>> Финишный маркер обнаружен! Проталкиваем 'reset' в FDL2...")
-                        try:
-                            proc.stdin.write("reset\n")
-                            proc.stdin.flush()
-                            # Пауза, чтобы USB-контроллер ПК успел передать байты железке
-                            time.sleep(0.2)
-                        except Exception as e:
-                            print(f"[!] Ошибка отправки команды reset: {e}")
-                    break
             else:
                 break
 
@@ -77,13 +63,8 @@ def run_cmd_watchdog(cmd_list, cwd=None, idle_timeout=IDLE_TIMEOUT_SEC, send_res
             killed_by_watchdog = True
             break
 
-    # Закрываем дескрипторы и тушим подпроцесс
     try:
-        proc.stdin.close()
         proc.stdout.close()
-        if proc.poll() is None:
-            proc.terminate()
-            proc.wait(timeout=1)
     except Exception:
         pass
 
@@ -118,8 +99,7 @@ if action == "full_dump":
     os.makedirs(save_dir, exist_ok=True)
     try:
         print(">>> Запуск нативного дампа служебных разделов (all_lite)...")
-        # Добавлен флаг принудительного сброса после работы
-        returncode, killed = run_cmd_watchdog(["r", "all_lite"], cwd=DEVICE_DIR, send_reset_after=True)
+        returncode, killed = run_cmd_watchdog(["r", "all_lite"], cwd=DEVICE_DIR)
     finally:
         time.sleep(1.0)
         moved = move_dumped_files(DEVICE_DIR, save_dir)
@@ -173,7 +153,7 @@ elif action == "part_dump":
     save_path = os.path.join(save_dir, f"{part_name}.bin")
     print(f"\n>>> Запуск одиночного дампа раздела '{part_name}' (Размер: {part_size})...")
     
-    ret_code, killed = run_cmd_watchdog(["read_part", part_name, "0", part_size, save_path], cwd=DEVICE_DIR, send_reset_after=True)
+    ret_code, killed = run_cmd_watchdog(["read_part", part_name, "0", part_size, save_path], cwd=DEVICE_DIR)
     
     if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
         print(f"\n[+] Раздел {part_name} успешно сохранен: {save_path}")
@@ -208,7 +188,8 @@ elif action == "full_flash":
             print(f"\n>>> ЗАПУСК ПОЛНОЙ ПРОШИВКИ ({len(bin_files)} разделов)...")
             print(">>> НЕ ОТКЛЮЧАЙТЕ УСТРОЙСТВО ОТ ПК!")
             
-            ret_code, killed = run_cmd_watchdog(flash_commands, cwd=DEVICE_DIR, send_reset_after=True)
+            # Из flash_commands в основном коде main.py убран ручной append("reset"), так как он добавится тут нативно
+            ret_code, killed = run_cmd_watchdog(flash_commands, cwd=DEVICE_DIR)
             
             if ret_code == 0:
                 print("\n[+] УСПЕХ: Все разделы восстановлены, выполнен автоматический reset!")
@@ -245,8 +226,7 @@ elif action == "part_flash":
         print(f">>> Образ: {file_to_flash}")
         print(">>> НЕ ОТКЛЮЧАЙТЕ УСТРОЙСТВО!")
         
-        # Убран строковый аргумент "reset" из списка, так как вотчдог отправит его сам в интерактивном режиме
-        ret_code, killed = run_cmd_watchdog(["write_part", part_name, file_to_flash], cwd=DEVICE_DIR, send_reset_after=True)
+        ret_code, killed = run_cmd_watchdog(["write_part", part_name, file_to_flash], cwd=DEVICE_DIR)
         
         if ret_code == 0:
             print(f"\n[+] Раздел {part_name} успешно восстановлен из {folder_type}! Перезагрузка...")
