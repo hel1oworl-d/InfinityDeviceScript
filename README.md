@@ -83,7 +83,7 @@ python3 brom_script.py <action> <spd_dump_path> <workspace_path> [extra_args...]
 
 This repository is a **device-specific script database** for Unisoc-based chipsets. Each folder corresponds to a single device model and contains a script that drives `spd_dump` in BROM mode — dumping memory and flashing partitions.
 
-The repository is automatically downloaded and extracted by [**UnisocToolInfinity**](https://github.com/hel1oworl-d/UnisocToolInfinity) during the first-launch setup wizard, and can also be refreshed manually via the **"Repair / Update Database"** button in the app's settings.
+The repository is automatically downloaded and extracted by [**UnisocToolInfinity**](https://github.com/hel1oworl-d/UnisocTool-Infinity) during the first-launch setup wizard, and can also be refreshed manually via the **"Repair / Update Database"** button in the app's settings.
 
 ### 📂 Repository Structure
 
